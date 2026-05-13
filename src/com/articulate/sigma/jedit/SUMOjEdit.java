@@ -588,6 +588,80 @@ public class SUMOjEdit implements EBComponent, SUMOjEditActions {
         }
     }
 
+    /** ***************************************************************
+     * Finds the sigma-config.sh script path, or null if not found.
+     */
+    private File findSigmaConfigScript() {
+
+        String gitDir = System.getenv("ONTOLOGYPORTAL_GIT");
+        if (gitDir == null || gitDir.isEmpty())
+            gitDir = System.getProperty("user.home") + File.separator + "workspace";
+        File script = new File(gitDir, "sigmakee" + File.separator + "sigma-config.sh");
+        return script.isFile() ? script : null;
+    }
+
+    /** ***************************************************************
+     * Offers to permanently add the given .kif file to config.xml
+     * via sigma-config.sh.  Must be called on the EDT.
+     */
+    private void offerAddToConfig(String filePath) {
+
+        File script = findSigmaConfigScript();
+        if (script == null) return;   // script not installed — skip silently
+
+        String fileName = new File(filePath).getName();
+        int choice = javax.swing.JOptionPane.showConfirmDialog(
+                view,
+                fileName + " is not in your SigmaKEE config.\n"
+                    + "Add it permanently via sigma-config.sh?",
+                "Add to Config",
+                javax.swing.JOptionPane.YES_NO_OPTION,
+                javax.swing.JOptionPane.QUESTION_MESSAGE);
+        if (choice != javax.swing.JOptionPane.YES_OPTION) return;
+
+        runSigmaConfigAdd(script, filePath);
+    }
+
+    /** ***************************************************************
+     * Runs sigma-config.sh add &lt;filePath&gt; in a background thread
+     * and shows the result on the EDT when done.
+     */
+    private void runSigmaConfigAdd(File script, String filePath) {
+
+        new Thread(() -> {
+            try {
+                ProcessBuilder pb = new ProcessBuilder(
+                        "bash", script.getAbsolutePath(), "add", filePath);
+                pb.redirectErrorStream(true);
+                Process proc = pb.start();
+                String output = new String(proc.getInputStream().readAllBytes());
+                int code = proc.waitFor();
+
+                javax.swing.SwingUtilities.invokeLater(() -> {
+                    if (code == 0) {
+                        javax.swing.JOptionPane.showMessageDialog(view,
+                                "Added to config:\n" + output.strip(),
+                                "sigma-config.sh",
+                                javax.swing.JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        javax.swing.JOptionPane.showMessageDialog(view,
+                                "sigma-config.sh failed (exit " + code + "):\n"
+                                    + output.strip(),
+                                "sigma-config.sh error",
+                                javax.swing.JOptionPane.ERROR_MESSAGE);
+                    }
+                });
+            } catch (Exception ex) {
+                Log.log(Log.ERROR, this, "sigma-config.sh add failed: " + ex);
+                javax.swing.SwingUtilities.invokeLater(() ->
+                    javax.swing.JOptionPane.showMessageDialog(view,
+                            "Could not run sigma-config.sh:\n" + ex.getMessage(),
+                            "sigma-config.sh error",
+                            javax.swing.JOptionPane.ERROR_MESSAGE));
+            }
+        }, "sigma-config-add").start();
+    }
+
     /* Props at: https://www.jedit.org/api/org/gjt/sp/jedit/msg/package-summary.html */
     @Override
     public void handleMessage(EBMessage msg) { // this occurs on the EDT
@@ -1591,6 +1665,8 @@ public class SUMOjEdit implements EBComponent, SUMOjEditActions {
                         && e.msg.startsWith("This file is not loaded into the KB"));
                 } else {
                     notifiedNotInKB.add(filePath);
+                    final String fp2 = filePath;
+                    javax.swing.SwingUtilities.invokeLater(() -> offerAddToConfig(fp2));
                 }
             }
         }
